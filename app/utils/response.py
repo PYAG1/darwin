@@ -7,7 +7,7 @@ class ResponseModel(BaseModel):
     is_success: bool
     data: Optional[Any] = None
     message: str = ""
-    meta: Optional[dict] = {}
+    meta: Optional[dict] = None
 
 def success_response(data: Any = None, message: str = "Success") -> Dict:
     return ResponseModel(
