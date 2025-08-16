@@ -1,10 +1,11 @@
 from fastapi import APIRouter,Depends,HTTPException
-from schemas import UserBase,UserCreate
+from schemas import UserBase,UserCreate,UserLogin
 from sqlalchemy.orm import Session
 from models import User
-from utils import hash_password,create_access_token
+from utils import hash_password,create_access_token,verify_password
 from db import SessionLocal
-from utils.response import success_response, error_response
+from http import HTTPStatus
+from utils.response import success_response
 import uuid
 
 router= APIRouter()
@@ -59,4 +60,34 @@ def create_user(body:UserCreate, db :Session = Depends(get_db)):
         message="User created successfully"
     )
 
+
+
+
+@router.post("/sign-in")
+def sign_in(body: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user:
+       
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Invalid email or password")
+    
+ 
+    password_verified = verify_password(body.password, user.password) # type: ignore
+    
+    if not password_verified:
+        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid email or password")
+        
+    token = create_access_token({"sub": body.email})
+
+    return success_response(
+               data={
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            },
+            "access_token": token,
+            "token_type": "bearer"
+        },
+        message="f Welcome back {user.name}"
+    )
 
