@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyst Agent Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .chat-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .chat-messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #fafafa;
+            border-radius: 5px;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 80%;
+        }
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        .agent-message {
+            background-color: #e9ecef;
+            color: #333;
+        }
+        .agent-message.partial {
+            background-color: #fff3cd;
+            border-left: 3px solid #ffc107;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        #messageInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        #sendButton {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #sendButton:hover {
+            background-color: #0056b3;
+        }
+        #sendButton:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .connection-status {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .connecting {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .session-controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h1>Analyst Agent Chat</h1>
+        
+        <div class="session-controls">
+            <button id="startSessionBtn" class="btn btn-primary">Start Session</button>
+            <button id="endSessionBtn" class="btn btn-danger" disabled>End Session</button>
+            <button id="clearChatBtn" class="btn btn-secondary">Clear Chat</button>
+        </div>
+        
+        <div id="connectionStatus" class="connection-status disconnected">
+            Disconnected
+        </div>
+        
+        <div id="chatMessages" class="chat-messages"></div>
+        
+        <div class="input-container">
+            <input type="text" id="messageInput" placeholder="Type your message here..." disabled>
+            <button id="sendButton" disabled>Send</button>
+        </div>
+    </div>
+
+    <script>
+        class ChatClient {
+            constructor() {
+                this.sessionId = null;
+                this.eventSource = null;
+                this.isConnected = false;
+                this.messagesContainer = document.getElementById('chatMessages');
+                this.messageInput = document.getElementById('messageInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.statusElement = document.getElementById('connectionStatus');
+                this.startSessionBtn = document.getElementById('startSessionBtn');
+                this.endSessionBtn = document.getElementById('endSessionBtn');
+                this.clearChatBtn = document.getElementById('clearChatBtn');
+                
+                this.initializeEventListeners();
+            }
+            
+            initializeEventListeners() {
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.messageInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.sendMessage();
+                });
+                
+                this.startSessionBtn.addEventListener('click', () => this.startSession());
+                this.endSessionBtn.addEventListener('click', () => this.endSession());
+                this.clearChatBtn.addEventListener('click', () => this.clearChat());
+            }
+            
+            async startSession() {
+                try {
+                    this.updateStatus('connecting', 'Connecting...');
+                    
+                    const response = await fetch('/api/v1/chat/start-session', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ is_audio: false })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.is_success) {
+                        this.sessionId = data.data.session_id;
+                        this.connectToStream();
+                        this.addMessage('system', 'Session started successfully!');
+                    } else {
+                        throw new Error(data.message);
+                    }
+                } catch (error) {
+                    console.error('Failed to start session:', error);
+                    this.addMessage('system', `Failed to start session: ${error.message}`);
+                    this.updateStatus('disconnected', 'Disconnected');
+                }
+            }
+            
+            connectToStream() {
+                if (!this.sessionId) return;
+                
+                this.eventSource = new EventSource(`/api/v1/chat/stream/${this.sessionId}`);
+                
+                this.eventSource.onopen = () => {
+                    this.isConnected = true;
+                    this.updateStatus('connected', 'Connected');
+                    this.enableInput(true);
+                    this.startSessionBtn.disabled = true;
+                    this.endSessionBtn.disabled = false;
+                };
+                
+                this.eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleAgentMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing message:', error);
+                    }
+                };
+                
+                this.eventSource.onerror = () => {
+                    this.isConnected = false;
+                    this.updateStatus('disconnected', 'Connection lost');
+                    this.enableInput(false);
+                    this.eventSource.close();
+                };
+            }
+            
+            handleAgentMessage(data) {
+                switch (data.type) {
+                    case 'text':
+                        if (data.partial) {
+                            this.updatePartialMessage(data.data);
+                        } else {
+                            this.finalizePartialMessage(data.data);
+                        }
+                        break;
+                    case 'control':
+                        if (data.turn_complete) {
+                            console.log('Turn completed');
+                        }
+                        break;
+                    case 'error':
+                        this.addMessage('system', `Error: ${data.message}`);
+                        break;
+                    default:
+                        console.log('Unknown message type:', data);
+                }
+            }
+            
+            updatePartialMessage(text) {
+                let partialElement = this.messagesContainer.querySelector('.partial-message');
+                
+                if (!partialElement) {
+                    partialElement = document.createElement('div');
+                    partialElement.className = 'message agent-message partial partial-message';
+                    this.messagesContainer.appendChild(partialElement);
+                }
+                
+                partialElement.textContent = text;
+                this.scrollToBottom();
+            }
+            
+            finalizePartialMessage(text) {
+                let partialElement = this.messagesContainer.querySelector('.partial-message');
+                
+                if (partialElement) {
+                    partialElement.className = 'message agent-message';
+                    partialElement.classList.remove('partial-message');
+                    partialElement.textContent = text;
+                } else {
+                    this.addMessage('agent', text);
+                }
+                
+                this.scrollToBottom();
+            }
+            
+            async sendMessage() {
+                const message = this.messageInput.value.trim();
+                if (!message || !this.isConnected) return;
+                
+                this.addMessage('user', message);
+                this.messageInput.value = '';
+                
+                try {
+                    const response = await fetch(`/api/v1/chat/send/${this.sessionId}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            mime_type: 'text/plain',
+                            data: message
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (!data.is_success) {
+                        this.addMessage('system', `Error sending message: ${data.message}`);
+                    }
+                } catch (error) {
+                    console.error('Error sending message:', error);
+                    this.addMessage('system', `Failed to send message: ${error.message}`);
+                }
+            }
+            
+            async endSession() {
+                if (!this.sessionId) return;
+                
+                try {
+                    await fetch(`/api/v1/chat/end-session/${this.sessionId}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                    }
+                    
+                    this.isConnected = false;
+                    this.sessionId = null;
+                    this.updateStatus('disconnected', 'Disconnected');
+                    this.enableInput(false);
+                    this.startSessionBtn.disabled = false;
+                    this.endSessionBtn.disabled = true;
+                    this.addMessage('system', 'Session ended');
+                } catch (error) {
+                    console.error('Error ending session:', error);
+                }
+            }
+            
+            addMessage(sender, text) {
+                const messageElement = document.createElement('div');
+                messageElement.className = `message ${sender === 'user' ? 'user-message' : (sender === 'agent' ? 'agent-message' : 'system-message')}`;
+                messageElement.textContent = text;
+                
+                this.messagesContainer.appendChild(messageElement);
+                this.scrollToBottom();
+            }
+            
+            clearChat() {
+                this.messagesContainer.innerHTML = '';
+            }
+            
+            updateStatus(status, text) {
+                this.statusElement.className = `connection-status ${status}`;
+                this.statusElement.textContent = text;
+            }
+            
+            enableInput(enabled) {
+                this.messageInput.disabled = !enabled;
+                this.sendButton.disabled = !enabled;
+            }
+            
+            scrollToBottom() {
+                this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+            }
+        }
+        
+        // Initialize the chat client when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new ChatClient();
+        });
+    </script>
+</body>
+</html>
