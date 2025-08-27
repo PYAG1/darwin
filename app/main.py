@@ -4,8 +4,8 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware 
 
-from api.v1 import auth
-from utils.response import error_response
+from .api.v1 import auth  # Changed to relative import
+from .utils.response import error_response  # Changed to relative import
 
 app = FastAPI()
 
@@ -20,16 +20,10 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1/auth")
 
-
-
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
 
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
 
 
 @app.exception_handler(HTTPException)

@@ -1,14 +1,21 @@
-from fastapi import APIRouter,Depends,HTTPException
-from schemas import UserBase,UserCreate,UserLogin
-from sqlalchemy.orm import Session
-from models import User
-from utils import hash_password,create_access_token,verify_password
-from db import SessionLocal
-from http import HTTPStatus
-from utils.response import success_response
+# Standard library imports
 import uuid
+from http import HTTPStatus
 
-router= APIRouter()
+# Third-party imports
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+# Local imports
+from app.db import SessionLocal
+from app.models import User
+from app.schemas import UserBase, UserCreate, UserLogin
+from app.utils.auth import hash_password, create_access_token, verify_password
+from app.utils.response import success_response
+
+router = APIRouter()
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -23,10 +30,10 @@ def print_user(user: UserBase):
     return {"message": f"Printed user {user.username} with email {user.email}"}
 
 @router.post("/create-user")
-def create_user(body:UserCreate, db :Session = Depends(get_db)):
+def create_user(body: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == body.email).first()
     if db_user:
-        raise HTTPException(status_code=409,detail="User with this email already exists")
+        raise HTTPException(status_code=409, detail="User with this email already exists")
     
     hashed_password = hash_password(body.password)
     
@@ -67,19 +74,17 @@ def create_user(body:UserCreate, db :Session = Depends(get_db)):
 def sign_in(body: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email).first()
     if not user:
-       
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Invalid email or password")
-    
- 
-    password_verified = verify_password(body.password, user.password) # type: ignore
-    
+
+    password_verified = verify_password(body.password, user.password)  # type: ignore
+
     if not password_verified:
         raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid email or password")
-        
+
     token = create_access_token({"sub": body.email})
 
     return success_response(
-               data={
+        data={
             "user": {
                 "id": user.id,
                 "name": user.name,
@@ -88,6 +93,6 @@ def sign_in(body: UserLogin, db: Session = Depends(get_db)):
             "access_token": token,
             "token_type": "bearer"
         },
-        message="f Welcome back {user.name}"
+        message=f"Welcome back {user.name}"
     )
 
