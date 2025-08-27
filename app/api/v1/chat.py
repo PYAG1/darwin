@@ -1,22 +1,18 @@
-# Standard library imports
+
 import json
-import base64
 import uuid
 from typing import Dict, Any
 
-# Third-party imports
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-# Google ADK imports
 from google.genai.types import Part, Content, Blob
 from google.adk.runners import InMemoryRunner
 from google.adk.agents import LiveRequestQueue
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
-# Local imports
 from app.agent.analyst_agent.agent import root_agent
 from app.db import SessionLocal
 from app.models import User
@@ -56,7 +52,7 @@ async def get_current_user(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-async def start_agent_session(user_id: str, is_audio: bool = False):
+async def start_agent_session(user_id: str):
     """Starts an agent session"""
     
     # Create a Runner
@@ -71,10 +67,9 @@ async def start_agent_session(user_id: str, is_audio: bool = False):
         user_id=user_id,
     )
 
-    # Set response modality
-    modality = "AUDIO" if is_audio else "TEXT"
+    # Set response modality to TEXT only
     run_config = RunConfig(
-        response_modalities=[modality],
+        response_modalities=["TEXT"],
         session_resumption=types.SessionResumptionConfig()
     )
 
@@ -111,20 +106,6 @@ async def agent_to_client_sse(live_events):
         if not part:
             continue
 
-        # If it's audio, send Base64 encoded audio data
-        is_audio = part.inline_data and part.inline_data.mime_type.startswith("audio/pcm")
-        if is_audio:
-            audio_data = part.inline_data and part.inline_data.data
-            if audio_data:
-                message = {
-                    "type": "audio",
-                    "mime_type": "audio/pcm",
-                    "data": base64.b64encode(audio_data).decode("ascii")
-                }
-                yield f"data: {json.dumps(message)}\n\n"
-                print(f"[AGENT TO CLIENT]: audio/pcm: {len(audio_data)} bytes.")
-                continue
-
         # If it's text and a partial text, send it
         if part.text and event.partial:
             message = {
@@ -149,16 +130,16 @@ async def agent_to_client_sse(live_events):
 
 
 @router.get("/stream/{user_id}")
-async def chat_stream_endpoint(user_id: str, is_audio: str = "false"):
+async def chat_stream_endpoint(user_id: str):
     """SSE endpoint for agent to client communication"""
     
     # Start agent session
-    live_events, live_request_queue = await start_agent_session(user_id, is_audio == "true")
+    live_events, live_request_queue = await start_agent_session(user_id)
 
     # Store the request queue for this user
     active_sessions[user_id] = live_request_queue
 
-    print(f"Client {user_id} connected via SSE, audio mode: {is_audio}")
+    print(f"Client {user_id} connected via SSE")
 
     def cleanup():
         live_request_queue.close()
@@ -207,19 +188,13 @@ async def send_message_endpoint(user_id: str, request: Request):
     data = message.get("data", "")
 
     try:
-        # Send the message to the agent
+        # Send the message to the agent (text only)
         if mime_type == "text/plain":
             content = Content(role="user", parts=[Part.from_text(text=data)])
             live_request_queue.send_content(content=content)
             print(f"[CLIENT TO AGENT]: {data}")
-            
-        elif mime_type == "audio/pcm":
-            decoded_data = base64.b64decode(data)
-            live_request_queue.send_realtime(Blob(data=decoded_data, mime_type=mime_type))
-            print(f"[CLIENT TO AGENT]: audio/pcm: {len(decoded_data)} bytes")
-            
         else:
-            return error_response(message=f"Mime type not supported: {mime_type}")
+            return error_response(message=f"Mime type not supported: {mime_type}. Only text/plain is supported.")
 
         return success_response(message="Message sent successfully")
         
@@ -232,14 +207,13 @@ async def send_message_endpoint(user_id: str, request: Request):
 async def start_session_endpoint(request: Request):
     """Start a new chat session"""
     body = await request.json()
-    is_audio = body.get("is_audio", False)
     
     # Generate a unique session ID
     session_id = str(uuid.uuid4())
     
     try:
         # Pre-initialize the session
-        live_events, live_request_queue = await start_agent_session(session_id, is_audio)
+        _, live_request_queue = await start_agent_session(session_id)
         
         # Store it temporarily (will be replaced when streaming starts)
         active_sessions[session_id] = live_request_queue
